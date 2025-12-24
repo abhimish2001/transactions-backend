@@ -1,7 +1,26 @@
 const Transaction = require("../models/Transaction");
 const cloudinary = require("../config/cloudinary");
 
-/* ================= CREATE ================= */
+/* =========================================================
+   HELPER: Upload buffer to Cloudinary
+========================================================= */
+const uploadToCloudinary = (buffer) => {
+  return new Promise((resolve, reject) => {
+    cloudinary.uploader
+      .upload_stream({ folder: "transactions" }, (error, result) => {
+        if (error) return reject(error);
+        resolve({
+          url: result.secure_url,
+          publicId: result.public_id,
+        });
+      })
+      .end(buffer);
+  });
+};
+
+/* =========================================================
+   CREATE TRANSACTION
+========================================================= */
 exports.createTransaction = async (req, res) => {
   try {
     const {
@@ -13,13 +32,22 @@ exports.createTransaction = async (req, res) => {
       transactionDate,
       counterparty = "",
       remarks = "",
-      attachments = [], // ✅ from frontend
     } = req.body;
 
     if (!title || !amount || !category) {
       return res.status(400).json({
         message: "Title, amount and category are required",
       });
+    }
+
+    /* ---------- Upload Attachments ---------- */
+    let attachments = [];
+
+    if (req.files?.length) {
+      for (const file of req.files) {
+        const uploaded = await uploadToCloudinary(file.buffer);
+        attachments.push(uploaded);
+      }
     }
 
     const transaction = await Transaction.create({
@@ -31,7 +59,7 @@ exports.createTransaction = async (req, res) => {
       counterparty: counterparty.trim(),
       amount: Number(amount),
       remarks: remarks.trim(),
-      attachments, // ✅ directly saved
+      attachments,
       createdBy: req.user._id,
     });
 
@@ -42,7 +70,9 @@ exports.createTransaction = async (req, res) => {
   }
 };
 
-/* ================= GET ONE ================= */
+/* =========================================================
+   GET SINGLE TRANSACTION
+========================================================= */
 exports.getTransaction = async (req, res) => {
   try {
     const transaction = await Transaction.findOne({
@@ -57,12 +87,14 @@ exports.getTransaction = async (req, res) => {
 
     return res.status(200).json(transaction);
   } catch (error) {
-    console.error("GET_TRANSACTION_ERROR:", error.message);
+    console.error("GET_TRANSACTION_ERROR:", error);
     return res.status(500).json({ message: "Failed to fetch transaction" });
   }
 };
 
-/* ================= GET ALL ================= */
+/* =========================================================
+   GET ALL TRANSACTIONS (FILTER + PAGINATION)
+========================================================= */
 exports.getTransactions = async (req, res) => {
   try {
     const {
@@ -130,12 +162,14 @@ exports.getTransactions = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("GET_TRANSACTIONS_ERROR:", error.message);
+    console.error("GET_TRANSACTIONS_ERROR:", error);
     return res.status(500).json({ message: "Failed to fetch transactions" });
   }
 };
 
-/* ================= UPDATE ================= */
+/* =========================================================
+   UPDATE TRANSACTION
+========================================================= */
 exports.updateTransaction = async (req, res) => {
   try {
     const updateData = { ...req.body };
@@ -148,19 +182,33 @@ exports.updateTransaction = async (req, res) => {
       updateData.transactionDate = new Date(updateData.transactionDate);
     }
 
-    updateData.updatedBy = req.user._id;
-    updateData.updatedOn = new Date();
+    /* ---------- Upload New Attachments ---------- */
+    let newAttachments = [];
+
+    if (req.files?.length) {
+      for (const file of req.files) {
+        const uploaded = await uploadToCloudinary(file.buffer);
+        newAttachments.push(uploaded);
+      }
+    }
 
     const updated = await Transaction.findOneAndUpdate(
       { _id: req.params.id, createdBy: req.user._id },
-      updateData,
+      {
+        ...updateData,
+        ...(newAttachments.length && {
+          $push: { attachments: { $each: newAttachments } },
+        }),
+        updatedBy: req.user._id,
+        updatedOn: new Date(),
+      },
       { new: true, runValidators: true }
     );
 
     if (!updated) {
-      return res.status(404).json({
-        message: "Transaction not found or unauthorized",
-      });
+      return res
+        .status(404)
+        .json({ message: "Transaction not found or unauthorized" });
     }
 
     return res.status(200).json(updated);
@@ -170,7 +218,9 @@ exports.updateTransaction = async (req, res) => {
   }
 };
 
-/* ================= DELETE ================= */
+/* =========================================================
+   DELETE TRANSACTION
+========================================================= */
 exports.deleteTransaction = async (req, res) => {
   try {
     const transaction = await Transaction.findOne({
@@ -182,9 +232,11 @@ exports.deleteTransaction = async (req, res) => {
       return res.status(404).json({ message: "Transaction not found" });
     }
 
-    // 🔥 delete images from cloudinary
-    for (const file of transaction.attachments) {
-      await cloudinary.uploader.destroy(file.publicId);
+    /* ---------- Delete Cloudinary Files ---------- */
+    for (const file of transaction.attachments || []) {
+      if (file.publicId) {
+        await cloudinary.uploader.destroy(file.publicId);
+      }
     }
 
     await transaction.deleteOne();

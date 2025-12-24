@@ -3,11 +3,14 @@ const mongoose = require("mongoose");
 /* ================= ATTACHMENT ================= */
 const attachmentSchema = new mongoose.Schema(
   {
-    filename: String,
-    originalname: String,
-    mimetype: String,
-    size: Number,
-    url: String,
+    url: {
+      type: String,
+      required: true,
+    },
+    publicId: {
+      type: String,
+      required: true,
+    },
   },
   { _id: false }
 );
@@ -15,6 +18,12 @@ const attachmentSchema = new mongoose.Schema(
 /* ================= TRANSACTION ================= */
 const transactionSchema = new mongoose.Schema(
   {
+    title: {
+      type: String,
+      required: true,
+      index: true,
+    },
+
     category: {
       type: String,
       required: true,
@@ -28,14 +37,14 @@ const transactionSchema = new mongoose.Schema(
       index: true,
     },
 
-    transactionDate: {
-      type: Date,
-      required: true,
+    transactionMode: {
+      type: String,
+      enum: ["UPI", "Cash", "Card", "Bank", "Wallet"],
       index: true,
     },
 
-    title: {
-      type: String,
+    transactionDate: {
+      type: Date,
       required: true,
       index: true,
     },
@@ -50,24 +59,23 @@ const transactionSchema = new mongoose.Schema(
       required: true,
     },
 
-    remarks: String,
-
-    transactionMode: {
+    remarks: {
       type: String,
-      enum: ["UPI", "Cash", "Card", "Bank", "Wallet"],
-      index: true,
+    },
+
+    attachments: {
+      type: [attachmentSchema],
+      default: [],
+    },
+
+    customFields: {
+      type: mongoose.Schema.Types.Mixed,
     },
 
     active: {
       type: Boolean,
       default: true,
       index: true,
-    },
-
-    attachments: [attachmentSchema],
-
-    customFields: {
-      type: mongoose.Schema.Types.Mixed,
     },
 
     createdBy: {
@@ -93,25 +101,22 @@ const transactionSchema = new mongoose.Schema(
     },
   },
   {
-    minimize: false, // keeps empty objects (important for customFields)
+    minimize: false,
+    timestamps: false,
   }
 );
 
-/* ================= COMPOUND INDEXES ================= */
+/* ================= INDEXES ================= */
 
-// 🔥 User + Date (MOST IMPORTANT)
+// 🔥 User + Date (most used)
 transactionSchema.index({ createdBy: 1, transactionDate: -1 });
 
-// 🔥 User + Type
+// 🔥 Filters
 transactionSchema.index({ createdBy: 1, transactionType: 1 });
-
-// 🔥 User + Mode
 transactionSchema.index({ createdBy: 1, transactionMode: 1 });
-
-// 🔥 User + Category
 transactionSchema.index({ createdBy: 1, category: 1 });
 
-// 🔥 Search optimization
+// 🔥 Full-text search
 transactionSchema.index({
   title: "text",
   counterparty: "text",

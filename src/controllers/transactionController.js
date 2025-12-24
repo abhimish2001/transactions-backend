@@ -1,14 +1,5 @@
 const Transaction = require("../models/Transaction");
-
-/* ================= HELPERS ================= */
-const mapAttachments = (files = []) =>
-  files.map((file) => ({
-    filename: file.filename,
-    originalname: file.originalname,
-    mimetype: file.mimetype,
-    size: file.size,
-    url: `/uploads/${file.filename}`,
-  }));
+const cloudinary = require("../config/cloudinary");
 
 /* ================= CREATE ================= */
 exports.createTransaction = async (req, res) => {
@@ -22,6 +13,7 @@ exports.createTransaction = async (req, res) => {
       transactionDate,
       counterparty = "",
       remarks = "",
+      attachments = [], // ✅ from frontend
     } = req.body;
 
     if (!title || !amount || !category) {
@@ -39,13 +31,13 @@ exports.createTransaction = async (req, res) => {
       counterparty: counterparty.trim(),
       amount: Number(amount),
       remarks: remarks.trim(),
-      attachments: mapAttachments(req.files),
+      attachments, // ✅ directly saved
       createdBy: req.user._id,
     });
 
     return res.status(201).json(transaction);
   } catch (error) {
-    console.error("CREATE_TRANSACTION_ERROR:", error.message);
+    console.error("CREATE_TRANSACTION_ERROR:", error);
     return res.status(500).json({ message: "Failed to create transaction" });
   }
 };
@@ -161,12 +153,7 @@ exports.updateTransaction = async (req, res) => {
 
     const updated = await Transaction.findOneAndUpdate(
       { _id: req.params.id, createdBy: req.user._id },
-      {
-        ...updateData,
-        ...(req.files?.length && {
-          $push: { attachments: { $each: mapAttachments(req.files) } },
-        }),
-      },
+      updateData,
       { new: true, runValidators: true }
     );
 
@@ -178,7 +165,7 @@ exports.updateTransaction = async (req, res) => {
 
     return res.status(200).json(updated);
   } catch (error) {
-    console.error("UPDATE_TRANSACTION_ERROR:", error.message);
+    console.error("UPDATE_TRANSACTION_ERROR:", error);
     return res.status(500).json({ message: "Failed to update transaction" });
   }
 };
@@ -186,20 +173,27 @@ exports.updateTransaction = async (req, res) => {
 /* ================= DELETE ================= */
 exports.deleteTransaction = async (req, res) => {
   try {
-    const deleted = await Transaction.findOneAndDelete({
+    const transaction = await Transaction.findOne({
       _id: req.params.id,
       createdBy: req.user._id,
     });
 
-    if (!deleted) {
+    if (!transaction) {
       return res.status(404).json({ message: "Transaction not found" });
     }
+
+    // 🔥 delete images from cloudinary
+    for (const file of transaction.attachments) {
+      await cloudinary.uploader.destroy(file.publicId);
+    }
+
+    await transaction.deleteOne();
 
     return res
       .status(200)
       .json({ message: "Transaction deleted successfully" });
   } catch (error) {
-    console.error("DELETE_TRANSACTION_ERROR:", error.message);
+    console.error("DELETE_TRANSACTION_ERROR:", error);
     return res.status(500).json({ message: "Failed to delete transaction" });
   }
 };

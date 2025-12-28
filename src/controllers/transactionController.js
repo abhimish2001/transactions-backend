@@ -168,12 +168,21 @@ exports.getTransactions = async (req, res) => {
 };
 
 /* =========================================================
-   UPDATE TRANSACTION
+   UPDATE TRANSACTION - FIXED ATTACHMENT HANDLING
 ========================================================= */
 exports.updateTransaction = async (req, res) => {
   try {
+    console.log("📝 UPDATE_TRANSACTION START");
+    console.log("Body:", req.body);
+    console.log("Files:", req.files?.length || 0);
+
+    const { id } = req.params;
     const updateData = { ...req.body };
 
+    // Remove attachmentIds from updateData as it's not a DB field
+    delete updateData.attachmentIds;
+
+    // Parse amount and date
     if (updateData.amount) {
       updateData.amount = Number(updateData.amount);
     }
@@ -182,34 +191,88 @@ exports.updateTransaction = async (req, res) => {
       updateData.transactionDate = new Date(updateData.transactionDate);
     }
 
-    /* ---------- Upload New Attachments ---------- */
+    // Get current transaction
+    const transaction = await Transaction.findOne({
+      _id: id,
+      createdBy: req.user._id,
+    });
+
+    if (!transaction) {
+      return res
+        .status(404)
+        .json({ message: "Transaction not found or unauthorized" });
+    }
+
+    console.log("✅ Current attachments:", transaction.attachments);
+
+    /* ---------- ATTACHMENT IDS TO KEEP ---------- */
+    let attachmentIdsToKeep = [];
+
+    if (req.body.attachmentIds) {
+      try {
+        attachmentIdsToKeep = JSON.parse(req.body.attachmentIds);
+        console.log("📎 Attachment IDs to keep:", attachmentIdsToKeep);
+      } catch (e) {
+        console.error("Error parsing attachmentIds:", e);
+        attachmentIdsToKeep = [];
+      }
+    }
+
+    /* ---------- FIND ATTACHMENTS TO DELETE ---------- */
+    const attachmentsToDelete =
+      transaction.attachments?.filter(
+        (oldAttachment) => !attachmentIdsToKeep.includes(oldAttachment.publicId)
+      ) || [];
+
+    console.log("🗑️ Attachments to delete:", attachmentsToDelete);
+
+    /* ---------- DELETE FROM CLOUDINARY ---------- */
+    for (const attachment of attachmentsToDelete) {
+      try {
+        if (attachment.publicId) {
+          console.log("🗑️ Deleting from Cloudinary:", attachment.publicId);
+          await cloudinary.uploader.destroy(attachment.publicId);
+          console.log("✅ Deleted successfully");
+        }
+      } catch (error) {
+        console.error("Error deleting file from Cloudinary:", error);
+      }
+    }
+
+    /* ---------- UPLOAD NEW ATTACHMENTS ---------- */
     let newAttachments = [];
 
     if (req.files?.length) {
       for (const file of req.files) {
         const uploaded = await uploadToCloudinary(file.buffer);
         newAttachments.push(uploaded);
+        console.log("✅ New attachment uploaded:", uploaded.publicId);
       }
     }
 
+    /* ---------- COMBINE KEPT + NEW ATTACHMENTS ---------- */
+    const keptAttachments =
+      transaction.attachments?.filter((attachment) =>
+        attachmentIdsToKeep.includes(attachment.publicId)
+      ) || [];
+
+    const finalAttachments = [...keptAttachments, ...newAttachments];
+
+    console.log("📌 Final attachments:", finalAttachments);
+
+    /* ---------- UPDATE TRANSACTION ---------- */
     const updated = await Transaction.findOneAndUpdate(
-      { _id: req.params.id, createdBy: req.user._id },
+      { _id: id, createdBy: req.user._id },
       {
         ...updateData,
-        ...(newAttachments.length && {
-          $push: { attachments: { $each: newAttachments } },
-        }),
+        attachments: finalAttachments,
         updatedBy: req.user._id,
         updatedOn: new Date(),
       },
       { new: true, runValidators: true }
     );
 
-    if (!updated) {
-      return res
-        .status(404)
-        .json({ message: "Transaction not found or unauthorized" });
-    }
+    console.log("✅ Transaction updated successfully");
 
     return res.status(200).json(updated);
   } catch (error) {
@@ -235,11 +298,14 @@ exports.deleteTransaction = async (req, res) => {
     /* ---------- Delete Cloudinary Files ---------- */
     for (const file of transaction.attachments || []) {
       if (file.publicId) {
+        console.log("🗑️ Deleting from Cloudinary:", file.publicId);
         await cloudinary.uploader.destroy(file.publicId);
       }
     }
 
     await transaction.deleteOne();
+
+    console.log("✅ Transaction deleted successfully");
 
     return res
       .status(200)

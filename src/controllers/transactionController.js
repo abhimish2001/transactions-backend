@@ -40,7 +40,6 @@ exports.createTransaction = async (req, res) => {
       });
     }
 
-    /* ---------- Upload Attachments ---------- */
     let attachments = [];
 
     if (req.files?.length) {
@@ -65,8 +64,9 @@ exports.createTransaction = async (req, res) => {
 
     return res.status(201).json(transaction);
   } catch (error) {
-    console.error("CREATE_TRANSACTION_ERROR:", error);
-    return res.status(500).json({ message: "Failed to create transaction" });
+    return res.status(500).json({
+      message: "Failed to create transaction",
+    });
   }
 };
 
@@ -87,8 +87,9 @@ exports.getTransaction = async (req, res) => {
 
     return res.status(200).json(transaction);
   } catch (error) {
-    console.error("GET_TRANSACTION_ERROR:", error);
-    return res.status(500).json({ message: "Failed to fetch transaction" });
+    return res.status(500).json({
+      message: "Failed to fetch transaction",
+    });
   }
 };
 
@@ -162,27 +163,22 @@ exports.getTransactions = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("GET_TRANSACTIONS_ERROR:", error);
-    return res.status(500).json({ message: "Failed to fetch transactions" });
+    return res.status(500).json({
+      message: "Failed to fetch transactions",
+    });
   }
 };
 
 /* =========================================================
-   UPDATE TRANSACTION - FIXED ATTACHMENT HANDLING
+   UPDATE TRANSACTION
 ========================================================= */
 exports.updateTransaction = async (req, res) => {
   try {
-    console.log("📝 UPDATE_TRANSACTION START");
-    console.log("Body:", req.body);
-    console.log("Files:", req.files?.length || 0);
-
     const { id } = req.params;
     const updateData = { ...req.body };
 
-    // Remove attachmentIds from updateData as it's not a DB field
     delete updateData.attachmentIds;
 
-    // Parse amount and date
     if (updateData.amount) {
       updateData.amount = Number(updateData.amount);
     }
@@ -191,93 +187,68 @@ exports.updateTransaction = async (req, res) => {
       updateData.transactionDate = new Date(updateData.transactionDate);
     }
 
-    // Get current transaction
     const transaction = await Transaction.findOne({
       _id: id,
       createdBy: req.user._id,
     });
 
     if (!transaction) {
-      return res
-        .status(404)
-        .json({ message: "Transaction not found or unauthorized" });
+      return res.status(404).json({
+        message: "Transaction not found or unauthorized",
+      });
     }
 
-    console.log("✅ Current attachments:", transaction.attachments);
-
-    /* ---------- ATTACHMENT IDS TO KEEP ---------- */
     let attachmentIdsToKeep = [];
 
     if (req.body.attachmentIds) {
       try {
         attachmentIdsToKeep = JSON.parse(req.body.attachmentIds);
-        console.log("📎 Attachment IDs to keep:", attachmentIdsToKeep);
-      } catch (e) {
-        console.error("Error parsing attachmentIds:", e);
+      } catch {
         attachmentIdsToKeep = [];
       }
     }
 
-    /* ---------- FIND ATTACHMENTS TO DELETE ---------- */
     const attachmentsToDelete =
       transaction.attachments?.filter(
-        (oldAttachment) => !attachmentIdsToKeep.includes(oldAttachment.publicId)
+        (a) => !attachmentIdsToKeep.includes(a.publicId)
       ) || [];
 
-    console.log("🗑️ Attachments to delete:", attachmentsToDelete);
-
-    /* ---------- DELETE FROM CLOUDINARY ---------- */
     for (const attachment of attachmentsToDelete) {
-      try {
-        if (attachment.publicId) {
-          console.log("🗑️ Deleting from Cloudinary:", attachment.publicId);
-          await cloudinary.uploader.destroy(attachment.publicId);
-          console.log("✅ Deleted successfully");
-        }
-      } catch (error) {
-        console.error("Error deleting file from Cloudinary:", error);
+      if (attachment.publicId) {
+        await cloudinary.uploader.destroy(attachment.publicId);
       }
     }
 
-    /* ---------- UPLOAD NEW ATTACHMENTS ---------- */
     let newAttachments = [];
 
     if (req.files?.length) {
       for (const file of req.files) {
         const uploaded = await uploadToCloudinary(file.buffer);
         newAttachments.push(uploaded);
-        console.log("✅ New attachment uploaded:", uploaded.publicId);
       }
     }
 
-    /* ---------- COMBINE KEPT + NEW ATTACHMENTS ---------- */
     const keptAttachments =
-      transaction.attachments?.filter((attachment) =>
-        attachmentIdsToKeep.includes(attachment.publicId)
+      transaction.attachments?.filter((a) =>
+        attachmentIdsToKeep.includes(a.publicId)
       ) || [];
 
-    const finalAttachments = [...keptAttachments, ...newAttachments];
-
-    console.log("📌 Final attachments:", finalAttachments);
-
-    /* ---------- UPDATE TRANSACTION ---------- */
     const updated = await Transaction.findOneAndUpdate(
       { _id: id, createdBy: req.user._id },
       {
         ...updateData,
-        attachments: finalAttachments,
+        attachments: [...keptAttachments, ...newAttachments],
         updatedBy: req.user._id,
         updatedOn: new Date(),
       },
       { new: true, runValidators: true }
     );
 
-    console.log("✅ Transaction updated successfully");
-
     return res.status(200).json(updated);
   } catch (error) {
-    console.error("UPDATE_TRANSACTION_ERROR:", error);
-    return res.status(500).json({ message: "Failed to update transaction" });
+    return res.status(500).json({
+      message: "Failed to update transaction",
+    });
   }
 };
 
@@ -295,23 +266,20 @@ exports.deleteTransaction = async (req, res) => {
       return res.status(404).json({ message: "Transaction not found" });
     }
 
-    /* ---------- Delete Cloudinary Files ---------- */
     for (const file of transaction.attachments || []) {
       if (file.publicId) {
-        console.log("🗑️ Deleting from Cloudinary:", file.publicId);
         await cloudinary.uploader.destroy(file.publicId);
       }
     }
 
     await transaction.deleteOne();
 
-    console.log("✅ Transaction deleted successfully");
-
-    return res
-      .status(200)
-      .json({ message: "Transaction deleted successfully" });
+    return res.status(200).json({
+      message: "Transaction deleted successfully",
+    });
   } catch (error) {
-    console.error("DELETE_TRANSACTION_ERROR:", error);
-    return res.status(500).json({ message: "Failed to delete transaction" });
+    return res.status(500).json({
+      message: "Failed to delete transaction",
+    });
   }
 };
